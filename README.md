@@ -218,8 +218,6 @@ backbone.fc = nn.Linear(backbone.fc.in_features, num_classes)
 
 Chetan - chetanpkomawar@gmail.com
 
-Project Link: [https://github.com/yourusername/cnn-image-classifier](https://github.com/yourusername/cnn-image-classifier)
-
 ---
 
 ⭐ Star this repository if you found it helpful!
