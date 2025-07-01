@@ -1,0 +1,420 @@
+# PyTorch CNN Image Classification Project
+# This project builds a Convolutional Neural Network to classify images using PyTorch
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, random_split
+import torchvision
+import torchvision.transforms as transforms
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+from tqdm import tqdm
+import os
+
+# Check if CUDA is available
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+
+class CNN(nn.Module):
+    """Convolutional Neural Network for image classification"""
+    
+    def __init__(self, num_classes=10):
+        super(CNN, self).__init__()
+        
+        # First convolutional block
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.pool1 = nn.MaxPool2d(2, 2)
+        
+        # Second convolutional block
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        
+        # Third convolutional block
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.pool3 = nn.MaxPool2d(2, 2)
+        
+        # Fourth convolutional block
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm2d(256)
+        self.pool4 = nn.MaxPool2d(2, 2)
+        
+        # Fully connected layers
+        self.fc1 = nn.Linear(256 * 2 * 2, 512)  # Adjusted for 32x32 input
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(512, num_classes)
+        
+    def forward(self, x):
+        # First block
+        x = self.pool1(F.relu(self.bn1(self.conv1(x))))
+        
+        # Second block
+        x = self.pool2(F.relu(self.bn2(self.conv2(x))))
+        
+        # Third block
+        x = self.pool3(F.relu(self.bn3(self.conv3(x))))
+        
+        # Fourth block
+        x = self.pool4(F.relu(self.bn4(self.conv4(x))))
+        
+        # Flatten for fully connected layers
+        x = x.view(x.size(0), -1)
+        
+        # Fully connected layers
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        
+        return x
+
+class ImageClassifier:
+    def __init__(self, num_classes=10, learning_rate=0.001):
+        self.num_classes = num_classes
+        self.learning_rate = learning_rate
+        self.model = CNN(num_classes).to(device)
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=5, factor=0.5)
+        self.train_losses = []
+        self.train_accuracies = []
+        self.val_losses = []
+        self.val_accuracies = []
+        
+    def load_cifar10_dataset(self, batch_size=32, val_split=0.1):
+        """Load and preprocess CIFAR-10 dataset"""
+        
+        # Define transforms for training (with augmentation) and validation/test
+        train_transform = transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomRotation(10),
+            transforms.RandomCrop(32, padding=4),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                               std=[0.229, 0.224, 0.225])
+        ])
+        
+        test_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                               std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Load datasets
+        full_train_dataset = torchvision.datasets.CIFAR10(
+            root='./data', train=True, download=True, transform=train_transform
+        )
+        
+        test_dataset = torchvision.datasets.CIFAR10(
+            root='./data', train=False, download=True, transform=test_transform
+        )
+        
+        # Split training data into train and validation
+        val_size = int(val_split * len(full_train_dataset))
+        train_size = len(full_train_dataset) - val_size
+        train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
+        
+        # Create data loaders
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+        
+        # CIFAR-10 class names
+        class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
+                      'dog', 'frog', 'horse', 'ship', 'truck']
+        
+        print(f"Training samples: {len(train_dataset)}")
+        print(f"Validation samples: {len(val_dataset)}")
+        print(f"Test samples: {len(test_dataset)}")
+        
+        return train_loader, val_loader, test_loader, class_names
+    
+    def train_epoch(self, train_loader):
+        """Train for one epoch"""
+        self.model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        progress_bar = tqdm(train_loader, desc='Training')
+        
+        for batch_idx, (data, targets) in enumerate(progress_bar):
+            data, targets = data.to(device), targets.to(device)
+            
+            # Zero gradients
+            self.optimizer.zero_grad()
+            
+            # Forward pass
+            outputs = self.model(data)
+            loss = self.criterion(outputs, targets)
+            
+            # Backward pass
+            loss.backward()
+            self.optimizer.step()
+            
+            # Statistics
+            running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+            
+            # Update progress bar
+            progress_bar.set_postfix({
+                'Loss': f'{running_loss/(batch_idx+1):.3f}',
+                'Acc': f'{100.*correct/total:.2f}%'
+            })
+        
+        epoch_loss = running_loss / len(train_loader)
+        epoch_acc = 100. * correct / total
+        
+        return epoch_loss, epoch_acc
+    
+    def validate_epoch(self, val_loader):
+        """Validate for one epoch"""
+        self.model.eval()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        with torch.no_grad():
+            for data, targets in tqdm(val_loader, desc='Validating'):
+                data, targets = data.to(device), targets.to(device)
+                
+                outputs = self.model(data)
+                loss = self.criterion(outputs, targets)
+                
+                running_loss += loss.item()
+                _, predicted = outputs.max(1)
+                total += targets.size(0)
+                correct += predicted.eq(targets).sum().item()
+        
+        epoch_loss = running_loss / len(val_loader)
+        epoch_acc = 100. * correct / total
+        
+        return epoch_loss, epoch_acc
+    
+    def train_model(self, train_loader, val_loader, epochs=50):
+        """Train the model"""
+        best_val_acc = 0.0
+        patience = 10
+        patience_counter = 0
+        
+        print(f"Starting training for {epochs} epochs...")
+        
+        for epoch in range(epochs):
+            print(f"\nEpoch {epoch+1}/{epochs}")
+            print("-" * 50)
+            
+            # Train
+            train_loss, train_acc = self.train_epoch(train_loader)
+            
+            # Validate
+            val_loss, val_acc = self.validate_epoch(val_loader)
+            
+            # Update learning rate
+            self.scheduler.step(val_loss)
+            
+            # Store metrics
+            self.train_losses.append(train_loss)
+            self.train_accuracies.append(train_acc)
+            self.val_losses.append(val_loss)
+            self.val_accuracies.append(val_acc)
+            
+            print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+            print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+            
+            # Early stopping
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                patience_counter = 0
+                # Save best model
+                torch.save(self.model.state_dict(), 'best_model.pth')
+                print(f"New best validation accuracy: {best_val_acc:.2f}%")
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs")
+                break
+        
+        # Load best model
+        self.model.load_state_dict(torch.load('best_model.pth'))
+        print(f"Training completed. Best validation accuracy: {best_val_acc:.2f}%")
+    
+    def plot_training_history(self):
+        """Plot training and validation metrics"""
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        
+        # Plot accuracy
+        ax1.plot(self.train_accuracies, label='Training Accuracy', color='blue')
+        ax1.plot(self.val_accuracies, label='Validation Accuracy', color='red')
+        ax1.set_title('Model Accuracy')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Accuracy (%)')
+        ax1.legend()
+        ax1.grid(True)
+        
+        # Plot loss
+        ax2.plot(self.train_losses, label='Training Loss', color='blue')
+        ax2.plot(self.val_losses, label='Validation Loss', color='red')
+        ax2.set_title('Model Loss')
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('Loss')
+        ax2.legend()
+        ax2.grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def evaluate_model(self, test_loader, class_names):
+        """Evaluate the model on test data"""
+        self.model.eval()
+        correct = 0
+        total = 0
+        all_predictions = []
+        all_targets = []
+        
+        with torch.no_grad():
+            for data, targets in tqdm(test_loader, desc='Testing'):
+                data, targets = data.to(device), targets.to(device)
+                outputs = self.model(data)
+                _, predicted = outputs.max(1)
+                
+                total += targets.size(0)
+                correct += predicted.eq(targets).sum().item()
+                
+                all_predictions.extend(predicted.cpu().numpy())
+                all_targets.extend(targets.cpu().numpy())
+        
+        test_accuracy = 100. * correct / total
+        print(f"Test Accuracy: {test_accuracy:.2f}%")
+        
+        # Classification report
+        print("\nClassification Report:")
+        print(classification_report(all_targets, all_predictions, target_names=class_names))
+        
+        # Confusion matrix
+        cm = confusion_matrix(all_targets, all_predictions)
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                   xticklabels=class_names, yticklabels=class_names)
+        plt.title('Confusion Matrix')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        plt.show()
+        
+        return test_accuracy
+    
+    def visualize_predictions(self, test_loader, class_names, num_images=16):
+        """Visualize model predictions"""
+        self.model.eval()
+        
+        # Get one batch of test data
+        data_iter = iter(test_loader)
+        images, labels = next(data_iter)
+        images, labels = images.to(device), labels.to(device)
+        
+        # Get predictions
+        with torch.no_grad():
+            outputs = self.model(images)
+            _, predicted = outputs.max(1)
+        
+        # Move to CPU for visualization
+        images = images.cpu()
+        predicted = predicted.cpu()
+        labels = labels.cpu()
+        
+        # Denormalize images for display
+        mean = torch.tensor([0.485, 0.456, 0.406])
+        std = torch.tensor([0.229, 0.224, 0.225])
+        
+        fig, axes = plt.subplots(4, 4, figsize=(12, 12))
+        axes = axes.ravel()
+        
+        for i in range(min(num_images, len(images))):
+            # Denormalize
+            img = images[i] * std[:, None, None] + mean[:, None, None]
+            img = torch.clamp(img, 0, 1)
+            
+            # Convert to numpy and transpose
+            img = img.numpy().transpose(1, 2, 0)
+            
+            axes[i].imshow(img)
+            color = 'green' if predicted[i] == labels[i] else 'red'
+            axes[i].set_title(f'True: {class_names[labels[i]]}\nPred: {class_names[predicted[i]]}', 
+                            color=color)
+            axes[i].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def save_model(self, filepath):
+        """Save the model"""
+        torch.save({
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'train_losses': self.train_losses,
+            'train_accuracies': self.train_accuracies,
+            'val_losses': self.val_losses,
+            'val_accuracies': self.val_accuracies
+        }, filepath)
+        print(f"Model saved to {filepath}")
+    
+    def load_model(self, filepath):
+        """Load the model"""
+        checkpoint = torch.load(filepath, map_location=device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.train_losses = checkpoint.get('train_losses', [])
+        self.train_accuracies = checkpoint.get('train_accuracies', [])
+        self.val_losses = checkpoint.get('val_losses', [])
+        self.val_accuracies = checkpoint.get('val_accuracies', [])
+        print(f"Model loaded from {filepath}")
+
+def main():
+    """Main training and evaluation function"""
+    # Initialize classifier
+    classifier = ImageClassifier(num_classes=10, learning_rate=0.001)
+    
+    # Print model architecture
+    print("Model Architecture:")
+    print(classifier.model)
+    
+    # Count parameters
+    total_params = sum(p.numel() for p in classifier.model.parameters())
+    trainable_params = sum(p.numel() for p in classifier.model.parameters() if p.requires_grad)
+    print(f"\nTotal parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    
+    # Load data
+    print("\nLoading CIFAR-10 dataset...")
+    train_loader, val_loader, test_loader, class_names = classifier.load_cifar10_dataset(
+        batch_size=32, val_split=0.1
+    )
+    
+    # Train model
+    classifier.train_model(train_loader, val_loader, epochs=50)
+    
+    # Plot training history
+    classifier.plot_training_history()
+    
+    # Evaluate model
+    print("\nEvaluating model on test set...")
+    test_accuracy = classifier.evaluate_model(test_loader, class_names)
+    
+    # Visualize predictions
+    classifier.visualize_predictions(test_loader, class_names, num_images=16)
+    
+    # Save final model
+    classifier.save_model('pytorch_image_classifier.pth')
+    
+    return classifier
+
+if __name__ == "__main__":
+    # Run the main function
+    trained_classifier = main()
