@@ -208,10 +208,6 @@ backbone.fc = nn.Linear(backbone.fc.in_features, num_classes)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## 🙏 Acknowledgments
 
 - [PyTorch](https://pytorch.org/) for the deep learning framework
